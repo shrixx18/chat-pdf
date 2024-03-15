@@ -1,3 +1,4 @@
+.env
 faiss_index
 venv
 
