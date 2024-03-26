@@ -4,13 +4,13 @@ import os
 from PyPDF2 import PdfReader
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
-
+from langchain.chains.llm import LLMChain
 from langchain_community.vectorstores import FAISS
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
- 
+from langchain.chains.summarize import load_summarize_chain
 # Load environment variables
 load_dotenv()
 
@@ -42,59 +42,69 @@ def get_vector_store(text_chunks):
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
     vector_store.save_local("faiss_index")  # Consider in-memory storage for performance
 
-# def generate_summary_map_reduce(pdf_file: UploadFile):
-#     """Generates a summary of a large PDF using MapReduce with GenAI and vector embeddings."""
-#     text = get_pdf_text(pdf_file)
-#     text_chunks = get_text_chunks(text)
+def generate_summary_map_reduce(pdf_file: UploadFile):
+    """Generates a summary of a large PDF using MapReduce with GenAI and vector embeddings."""
+    text = get_pdf_text(pdf_file)
+    
 
-#     # Vector embeddings
-#     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-#     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-#     vector_store.save_local("faiss_index2")
-#     # LLM for summarization
-#     llm = ChatGoogleGenerativeAI(model="gemini-pro",temperature=0.5)  # Replace with your model
+    # Vector embeddings
+    # embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    # vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    # vector_store.save_local("faiss_index2")
+    # LLM for summarization
+    llm = ChatGoogleGenerativeAI(model="gemini-pro",temperature=0)  # Replace with your model
+    
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=20)
+    chunks = text_splitter.create_documents([text])
+    
+    chain = load_summarize_chain(
+    llm,
+    chain_type='map_reduce',
+    verbose=False
+    )
+    summary = chain.run(chunks)
+    
+    # Map step prompt
+    # map_template = """The following is a set of documents
+    # {docs}
+    # Based on this list of docs, please identify the main themes
+    # Helpful Answer:"""
+    # map_prompt = PromptTemplate.from_template(map_template)
+    # map_chain = LLMChain(llm=llm, prompt=map_prompt)
 
-#     # Map step prompt
-#     map_template = """The following is a set of documents
-#     {docs}
-#     Based on this list of docs, please identify the main themes
-#     Helpful Answer:"""
-#     map_prompt = PromptTemplate.from_template(map_template)
-#     map_chain = LLMChain(llm=llm, prompt=map_prompt)
+    # # Reduce step prompt
+    # reduce_template = """The following is a set of summaries:
+    # {docs}
+    # Take these and distill it into a final, consolidated summary of the main themes.
+    # Helpful Answer:"""
+    # reduce_prompt = PromptTemplate.from_template(reduce_template)
 
-#     # Reduce step prompt
-#     reduce_template = """The following is a set of summaries:
-#     {docs}
-#     Take these and distill it into a final, consolidated summary of the main themes.
-#     Helpful Answer:"""
-#     reduce_prompt = PromptTemplate.from_template(reduce_template)
+    # # Chain creation
+    # reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
+    # combine_documents_chain = StuffDocumentsChain(
+    #     llm_chain=reduce_chain, document_variable_name="docs"
+    # )
+    # reduce_documents_chain = ReduceDocumentsChain(
+    #     combine_documents_chain=combine_documents_chain,
+    #     collapse_documents_chain=combine_documents_chain,
+    #     token_max=4000,  # Adjust as needed
+    # )
+    # map_reduce_chain = MapReduceDocumentsChain(
+    #     llm_chain=map_chain,
+    #     # map_chain=map_chain,
+    #     reduce_documents_chain=reduce_documents_chain,
+    #     document_variable_name="docs",
+    #     return_intermediate_steps=False,  # Set to True for debugging
+    # )
+    # text_splitter = CharacterTextSplitter.from_tiktoken_encoder(
+    #     chunk_size=1000, chunk_overlap=0
+    # )
+    # split_docs = text_splitter.split_documents(text)
 
-#     # Chain creation
-#     reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
-#     combine_documents_chain = StuffDocumentsChain(
-#         llm_chain=reduce_chain, document_variable_name="docs"
-#     )
-#     reduce_documents_chain = ReduceDocumentsChain(
-#         combine_documents_chain=combine_documents_chain,
-#         collapse_documents_chain=combine_documents_chain,
-#         token_max=4000,  # Adjust as needed
-#     )
-#     map_reduce_chain = MapReduceDocumentsChain(
-#         llm_chain=map_chain,
-#         # map_chain=map_chain,
-#         reduce_documents_chain=reduce_documents_chain,
-#         document_variable_name="docs",
-#         return_intermediate_steps=False,  # Set to True for debugging
-#     )
-#     text_splitter = CharacterTextSplitter.from_tiktoken_encoder(
-#         chunk_size=1000, chunk_overlap=0
-#     )
-#     split_docs = text_splitter.split_documents(text)
+    # # Generate summary
+    # summary = map_reduce_chain.run(split_docs)
 
-#     # Generate summary
-#     summary = map_reduce_chain.run(split_docs)
-
-#     return summary
+    return summary
 
 def get_conversational_chain():
     """Defines the question answering chain"""
@@ -133,7 +143,67 @@ def answer_question(question: str, pdf_file: UploadFile = File(...)):
 
     return response["output_text"]
 
+# def summarize_pdf(pdf_file: UploadFile) -> str:
+    """
+    Summarizes the uploaded PDF file in paragraphs, handling potential errors.
 
+    Args:
+        pdf_file: The uploaded PDF file.
+
+    Returns:
+        A string containing the summarized text in paragraphs, or an error message.
+    """
+
+    # Extract text from PDF (handle potential PDF errors)
+    try:
+        text = ""
+        with pdf_file.file as f:
+            pdf_reader = PdfReader(f)
+            for page in pdf_reader.pages:
+                text += page.extract_text()
+    except (AttributeError, ValueError) as e:
+        return f"Error: Could not extract text from PDF. Reason: {str(e)}."
+
+    # Split text into chunks for efficient processing
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=1000)
+    text_chunks = text_splitter.split_text(text)
+
+    # Load Google Generative AI for summarization (handle potential API errors)
+    try:
+        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+        llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.7)  # Adjust temperature for desired conciseness
+    except Exception as e:
+        return f"Error: Could not configure Google Generative AI. Reason: {str(e)}."
+
+    # Create a prompt template specifying desired summary style (paragraphs)
+    prompt_template = """
+    This is a document about: {text_chunks}
+
+    Please provide a concise summary of the document in multiple paragraphs,
+    focusing on the key points and avoiding unnecessary details.
+
+    Summary:
+    """
+
+    # Create a PromptTemplate object
+    prompt = PromptTemplate.from_template(prompt_template)
+
+    # Chain the LLM and prompt for summarization
+    chain = LLMChain(llm=llm, prompt=prompt)
+
+    # Run the summarization chain (handle potential LLM errors)
+    try:
+        summary = chain.run(text_chunks)
+    except Exception as e:
+        return f"Error: Error occurred during summarization. Reason: {str(e)}."
+
+    # Extract the generated summary text
+    summary_text = summary["output_text"].split("Summary: ")[-1].strip()
+
+    # Split the summary into paragraphs (adjust separator based on document structure)
+    paragraphs = summary_text.split("\n\n")
+
+    return "\n\n".join(paragraphs)
 
 
 
@@ -161,17 +231,34 @@ async def answer_from_pdf(question: str = Body(...), pdf_file: UploadFile = File
         print(f"Error processing PDF: {e}")
         return {"error": str(e)}
     
+# @app.post("/summarize_pdf")
+# async def summarize(pdf_file: UploadFile = File(...)):
+#     """
+#     API endpoint to summarize the uploaded PDF file.
 
+#     Args:
+#         pdf_file: The uploaded PDF file.
 
-# @app.post("/summary")
-# async def generate_summary_from_pdf(pdf_file: UploadFile = File(...)):
-#     """API endpoint to generate a summary of an uploaded PDF using MapReduce."""
+#     Returns:
+#         A JSON response containing the summarized text or an error message.
+#     """
+
 #     try:
-#         summary = generate_summary_map_reduce(pdf_file)
+#         summary = summarize_pdf(pdf_file)
 #         return {"summary": summary}
 #     except Exception as e:
-#         print(f"Error generating summary: {e}")
+#         print(f"Error summarizing PDF: {e}")
 #         return {"error": str(e)}
+
+@app.post("/summary")
+async def generate_summary_from_pdf(pdf_file: UploadFile = File(...)):
+    """API endpoint to generate a summary of an uploaded PDF using MapReduce."""
+    try:
+        summary = generate_summary_map_reduce(pdf_file)
+        return {"summary": summary}
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return {"error": str(e)}
 
 from fastapi.middleware.cors import CORSMiddleware
 
