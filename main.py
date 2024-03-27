@@ -46,23 +46,43 @@ def generate_summary_map_reduce(pdf_file: UploadFile):
     """Generates a summary of a large PDF using MapReduce with GenAI and vector embeddings."""
     text = get_pdf_text(pdf_file)
     
-
-    # Vector embeddings
-    # embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    # vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    # vector_store.save_local("faiss_index2")
-    # LLM for summarization
     llm = ChatGoogleGenerativeAI(model="gemini-pro",temperature=0)  # Replace with your model
     
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=20)
     chunks = text_splitter.create_documents([text])
     
-    chain = load_summarize_chain(
-    llm,
+    chunks_prompt="""
+    Please summarize the below text:
+    text:`{text}'
+    Summary:
+    """
+    map_prompt_template=PromptTemplate(input_variables=['text'],
+                                    template=chunks_prompt)
+    
+    final_combine_prompt='''
+    Provide a final summary of the entire text in separate paragraphs
+    so that summary generated covers all the points present in the text.
+    text: `{text}`
+    '''
+    final_combine_prompt_template=PromptTemplate(input_variables=['text'],
+                                             template=final_combine_prompt)
+    
+    summary_chain = load_summarize_chain(
+    llm=llm,
     chain_type='map_reduce',
+    map_prompt=map_prompt_template,
+    combine_prompt=final_combine_prompt_template,
     verbose=False
     )
-    summary = chain.run(chunks)
+    
+    return summary_chain.run(chunks)
+    
+    # chain = load_summarize_chain(
+    # llm,
+    # chain_type='map_reduce',
+    # verbose=False
+    # )
+    # summary = chain.run(chunks)
     
     # Map step prompt
     # map_template = """The following is a set of documents
@@ -104,7 +124,7 @@ def generate_summary_map_reduce(pdf_file: UploadFile):
     # # Generate summary
     # summary = map_reduce_chain.run(split_docs)
 
-    return summary
+    #return summary
 
 def get_conversational_chain():
     """Defines the question answering chain"""
